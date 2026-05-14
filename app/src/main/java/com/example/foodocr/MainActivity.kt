@@ -8,12 +8,17 @@ import android.util.Log
 import android.widget.TextView
 import androidx.appcompat.app.AppCompatActivity
 import androidx.camera.core.CameraSelector
+import androidx.camera.core.ExperimentalGetImage
 import androidx.camera.core.ImageAnalysis
 import androidx.camera.core.Preview
 import androidx.camera.lifecycle.ProcessCameraProvider
 import androidx.camera.view.PreviewView
 import androidx.core.app.ActivityCompat
 import androidx.core.content.ContextCompat
+import com.example.foodocr.offline.AssetModelRepository
+import com.example.foodocr.offline.OfflineDatePipeline
+import com.example.foodocr.offline.OfflineModelAssets
+import com.example.foodocr.offline.OfflineOnnxDateAnalyzer
 import java.util.concurrent.ExecutorService
 import java.util.concurrent.Executors
 
@@ -22,6 +27,7 @@ class MainActivity : AppCompatActivity() {
     private lateinit var viewFinder: PreviewView
     private lateinit var statusView: TextView
     private lateinit var hintView: TextView
+    private lateinit var debugView: TextView
     private lateinit var mfgResultView: TextView
     private lateinit var expResultView: TextView
     private lateinit var cameraExecutor: ExecutorService
@@ -29,7 +35,7 @@ class MainActivity : AppCompatActivity() {
     private val manufactureVotes = WeightedVoteBuffer()
     private val expiryVotes = WeightedVoteBuffer()
 
-    private var foodDateAnalyzer: FoodDateAnalyzer? = null
+    private var dateAnalyzer: AutoCloseable? = null
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -38,6 +44,7 @@ class MainActivity : AppCompatActivity() {
         viewFinder = findViewById(R.id.viewFinder)
         statusView = findViewById(R.id.statusText)
         hintView = findViewById(R.id.hintText)
+        debugView = findViewById(R.id.debugText)
         mfgResultView = findViewById(R.id.mfgResult)
         expResultView = findViewById(R.id.expResult)
 
@@ -57,6 +64,7 @@ class MainActivity : AppCompatActivity() {
         }
     }
 
+    @OptIn(ExperimentalGetImage::class)
     private fun startCamera() {
         val cameraProviderFuture = ProcessCameraProvider.getInstance(this)
 
@@ -68,16 +76,15 @@ class MainActivity : AppCompatActivity() {
                     it.surfaceProvider = viewFinder.surfaceProvider
                 }
 
-                foodDateAnalyzer?.close()
-                foodDateAnalyzer = FoodDateAnalyzer { result ->
-                    handleFrameResult(result)
-                }
+                dateAnalyzer?.close()
+                val analyzer = createAnalyzer()
+                dateAnalyzer = analyzer as AutoCloseable
 
                 val imageAnalysis = ImageAnalysis.Builder()
                     .setBackpressureStrategy(ImageAnalysis.STRATEGY_KEEP_ONLY_LATEST)
                     .build()
                     .also { analysis ->
-                        analysis.setAnalyzer(cameraExecutor, foodDateAnalyzer!!)
+                        analysis.setAnalyzer(cameraExecutor, analyzer)
                     }
 
                 try {
@@ -102,6 +109,18 @@ class MainActivity : AppCompatActivity() {
         )
     }
 
+    @ExperimentalGetImage
+    private fun createAnalyzer(): ImageAnalysis.Analyzer {
+        return if (AssetModelRepository.hasRequiredAssets(this, OfflineModelAssets())) {
+            statusView.text = "Offline ONNX mode"
+            val pipeline = OfflineDatePipeline.create(this)
+            OfflineOnnxDateAnalyzer(pipeline) { result -> handleFrameResult(result) }
+        } else {
+            statusView.text = "ML Kit fallback mode"
+            FoodDateAnalyzer { result -> handleFrameResult(result) }
+        }
+    }
+
     private fun handleFrameResult(result: FrameAnalysis) {
         result.manufactureObservation?.let(manufactureVotes::add)
         result.expiryObservation?.let(expiryVotes::add)
@@ -115,6 +134,7 @@ class MainActivity : AppCompatActivity() {
 
             statusView.text = result.statusMessage
             hintView.text = result.quality.hint
+            debugView.text = result.debugText.ifBlank { "DBG: -" }
         }
     }
 
@@ -164,7 +184,7 @@ class MainActivity : AppCompatActivity() {
 
     override fun onDestroy() {
         super.onDestroy()
-        foodDateAnalyzer?.close()
+        dateAnalyzer?.close()
         cameraExecutor.shutdown()
     }
 

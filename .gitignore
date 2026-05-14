@@ -5,6 +5,10 @@ build/
 app/build/
 local.properties
 *.iml
+*.apk
 captures/
+outputs/
+.venv/
 .DS_Store
 Thumbs.db
+__pycache__/

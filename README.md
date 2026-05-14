@@ -1,82 +1,200 @@
-# Food OCR
+# Food OCR Offline Android
 
-Android app for scanning food package dates with CameraX + Google ML Kit Chinese OCR.
+Android offline package-date recognition app based on the `yoloOcr` v2.2
+pipeline.
 
-## Current goals
+The app does not call any API. When the ONNX assets are present, it runs:
 
-- Recognize manufacture date and expiry date from food packaging
-- Handle mixed labels such as `MFG`, `MFD`, `EXP`, `BEST BEFORE`, `製造日期`, `有效期限`
-- Support multiple date formats, including compact numeric dates like `20261121`
-- Stabilize results with multi-frame weighted voting instead of trusting a single frame
-
-## Current implementation
-
-- Camera preview and live OCR analysis with CameraX
-- Chinese text recognition via ML Kit
-- Dual-role output:
-  - `MFG`
-  - `EXP`
-- Multi-format parsing:
-  - `yyyy-MM-dd`
-  - `yyyy/MM/dd`
-  - `yyyy.MM.dd`
-  - `yyyy年MM月dd日`
-  - compact 8-digit dates such as `20261121`
-  - compact 8-digit month-first dates such as `11212026`
-  - several 6-digit and ROC-year variants
-- Nearby-line pairing:
-  - tries to connect labels and dates even when they are split across adjacent lines
-- Weighted vote buffers:
-  - manufacture and expiry dates are voted independently across recent frames
-- Basic frame-quality checks:
-  - too dark
-  - too bright
-  - low contrast
-  - heavy glare
-- Fallback enhancement pass:
-  - when quality is poor and first OCR pass is weak, the app retries with a contrast-enhanced grayscale image
-
-## Project structure
-
-- `app/src/main/java/com/example/foodocr/MainActivity.kt`
-  App entry point, camera binding, UI updates, vote rendering
-- `app/src/main/java/com/example/foodocr/FoodDateAnalyzer.kt`
-  OCR pipeline, date parsing, label matching, quality scoring, weighted voting models
-- `app/src/main/res/layout/activity_main.xml`
-  Preview screen and status panel
-
-## Build
-
-Open in Android Studio and let Gradle sync, or run:
-
-```powershell
-.\gradlew.bat assembleDebug
-.\gradlew.bat assembleRelease
+```text
+CameraX frame -> scan-guide ROI -> YOLO date detector -> crop -> PPOCR rec -> date parser -> MFG/EXP assignment
 ```
 
-## Current APK outputs
+If any model asset is missing, the app falls back to the older ML Kit analyzer.
 
-These are generated locally and are not committed:
+## Current Accuracy Baseline
 
-- `app/build/outputs/apk/debug/app-debug.apk`
-- `app/build/outputs/apk/release/app-release.apk`
+Current validation command:
 
-## Known limitations
+```powershell
+.\scripts\run_val_report.ps1 -Dataset C:\Users\insta\Desktop\dataset -Split val
+```
 
-- Not yet validated against a large real-world packaging image set
-- Reflection, wrinkles, curved plastic, and dot-matrix printing can still reduce OCR quality
-- Date-role inference is heuristic-based; some edge cases may still swap MFG and EXP
-- No crop overlay or guided region-of-interest yet
-- No sample image regression tests yet
+Current `val` result:
 
-## Recommended next steps
+```text
+images: 362
+E2E accuracy: 350/362 = 96.7%
+crop padding: x=6, y=0
+YOLO IoU@0.50: 98.8%
+YOLO IoU@0.75: 97.4%
+```
 
-1. Collect real packaging photos from multiple brands and lighting conditions
-2. Add an image replay mode for testing without live camera
-3. Improve ROI detection so OCR focuses on likely date-print regions
-4. Tune heuristics using real examples with wrong predictions
-5. Consider optional OpenCV preprocessing if the current fallback is not enough
+Current Android test APK version:
 
-## Handoff
+```text
+versionName: 1.0.2
+versionCode: 3
+```
 
-See [docs/HANDOFF.md](docs/HANDOFF.md) for the current status, design choices, and what to continue on another machine.
+The crop padding is intentionally asymmetric. Horizontal padding keeps tight
+YOLO boxes from clipping digits, while vertical padding is `0` to avoid pulling
+nearby lines into the PPOCR recognition crop.
+
+## Repository Contents
+
+Important Android files:
+
+- `app/src/main/java/com/example/foodocr/MainActivity.kt`
+- `app/src/main/java/com/example/foodocr/ScanGuide.kt`
+- `app/src/main/java/com/example/foodocr/offline/`
+- `app/src/main/res/layout/activity_main.xml`
+
+Model assets committed in the repo:
+
+- `app/src/main/assets/models/yolo_date.onnx`
+- `app/src/main/assets/models/rec_finetuned.onnx`
+- `app/src/main/assets/models/ppocr_keys_v1.txt`
+
+Validation/report tools:
+
+- `tools/mobile_onnx_html_report.py`
+- `tools/evaluate_mobile_onnx.py`
+- `tools/requirements.txt`
+
+Convenience scripts:
+
+- `scripts/build_release_apk.ps1`
+- `scripts/run_val_report.ps1`
+
+Generated files are intentionally ignored:
+
+- `app/build/`
+- `outputs/`
+- `*.apk`
+- `.venv/`
+
+## Prerequisites
+
+For APK build:
+
+- Android Studio or Android SDK installed
+- JDK 17
+- Gradle wrapper from this repo
+
+For report generation:
+
+- Python 3.10+
+- Python packages from `tools/requirements.txt`
+
+Optional Python setup:
+
+```powershell
+python -m venv .venv
+.\.venv\Scripts\Activate.ps1
+python -m pip install --upgrade pip
+python -m pip install -r tools\requirements.txt
+```
+
+## Build APK
+
+From the repo root:
+
+```powershell
+.\scripts\build_release_apk.ps1
+```
+
+Or run Gradle directly:
+
+```powershell
+.\gradlew.bat :app:assembleRelease
+```
+
+Output:
+
+```text
+app/build/outputs/apk/release/app-release.apk
+```
+
+The current release build uses the debug signing config so it can be installed
+for local testing. Use a real keystore before production distribution.
+
+Install to a connected phone:
+
+```powershell
+adb install -r app\build\outputs\apk\release\app-release.apk
+```
+
+## Generate Validation Report
+
+Dataset layout expected by the report tool:
+
+```text
+dataset/
+  val/
+  val_label.txt
+  train/
+  train_label.txt
+```
+
+Run:
+
+```powershell
+.\scripts\run_val_report.ps1 -Dataset C:\Users\insta\Desktop\dataset -Split val
+```
+
+Quick environment check with only 10 images:
+
+```powershell
+.\scripts\run_val_report.ps1 -Dataset C:\Users\insta\Desktop\dataset -Split val -Limit 10
+```
+
+Outputs:
+
+```text
+outputs/report.html
+outputs/mobile_onnx_report_val.jsonl
+```
+
+The HTML report shows:
+
+- original image
+- green GT polygons
+- orange/red YOLO boxes
+- raw REC text
+- regex date result
+- GT date
+- best IoU per GT box
+
+## Clone On Another Computer
+
+1. Clone the repo.
+2. Open it once in Android Studio or make sure Android SDK/JDK 17 are available.
+3. Build APK:
+
+```powershell
+.\scripts\build_release_apk.ps1
+```
+
+4. To run report, install Python dependencies:
+
+```powershell
+python -m pip install -r tools\requirements.txt
+```
+
+5. Run report with the local dataset path:
+
+```powershell
+.\scripts\run_val_report.ps1 -Dataset D:\path\to\dataset -Split val
+```
+
+## Notes
+
+- The app is offline and does not call remote APIs.
+- Keep the ONNX assets in `app/src/main/assets/models/`.
+- Do not commit generated APKs or `outputs/` reports.
+- Android OpenCV `CV_8UC3` image data must be read as bytes and converted with
+  `value & 0xFF`; reading it into `DoubleArray` crashes on device.
+- ONNX Runtime Android may return model outputs as Java arrays such as
+  `float[][][]`, not always as `OnnxTensor`; decoders must handle both forms.
+- If accuracy drops after a model or preprocessing change, regenerate
+  `outputs/report.html` and compare REC text, regex result, and crop images.

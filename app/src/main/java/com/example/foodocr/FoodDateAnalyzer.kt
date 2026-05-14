@@ -52,6 +52,7 @@ data class FrameAnalysis(
     val manufactureObservation: DateObservation?,
     val expiryObservation: DateObservation?,
     val statusMessage: String,
+    val debugText: String = "",
 )
 
 data class VoteState(

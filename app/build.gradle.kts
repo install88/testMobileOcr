@@ -9,10 +9,10 @@ android {
 
     defaultConfig {
         applicationId = "com.example.foodocr"
-        minSdk = 23
+        minSdk = 24
         targetSdk = 36
-        versionCode = 1
-        versionName = "1.0"
+        versionCode = 3
+        versionName = "1.0.2"
 
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
     }
@@ -36,6 +36,10 @@ android {
     kotlinOptions {
         jvmTarget = JavaVersion.VERSION_17.toString()
     }
+
+    androidResources {
+        noCompress += listOf("onnx")
+    }
 }
 
 dependencies {
@@ -51,4 +55,6 @@ dependencies {
 
     implementation("com.google.mlkit:text-recognition-chinese:16.0.1")
     implementation("com.google.guava:guava:33.4.8-android")
+    implementation("com.microsoft.onnxruntime:onnxruntime-android:1.25.1")
+    implementation("org.opencv:opencv:4.13.0")
 }

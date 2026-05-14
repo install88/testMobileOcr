@@ -1,76 +1,92 @@
 # Handoff Notes
 
-## What has been completed
+## Current State
 
-- A standalone Android project was created at `foodocr_app`
-- CameraX preview and analysis are working
-- ML Kit Chinese OCR is integrated
-- The app now separates manufacture-date voting and expiry-date voting
-- The parser supports multiple date formats, including compact numeric styles
-- Adjacent-line grouping was added so labels and dates do not have to be on the exact same line
-- A basic image-quality scorer and fallback enhancement pass were added
-- Debug and release APKs build successfully on the current machine
+This repo is ready to clone on another Windows/Android development machine and
+rebuild locally.
 
-## Important files
+Completed:
 
-- `app/src/main/java/com/example/foodocr/MainActivity.kt`
-- `app/src/main/java/com/example/foodocr/FoodDateAnalyzer.kt`
-- `app/src/main/res/layout/activity_main.xml`
-- `app/build.gradle.kts`
+- Android CameraX scan screen
+- visible scan guide box for users to align the date
+- offline ONNX analyzer using YOLO + PPOCR rec
+- local model assets under `app/src/main/assets/models/`
+- raw debug area in the app showing `REC` and regex date output
+- MFG/EXP assignment heuristics
+- validation report generator with image overlays
+- PowerShell scripts for APK build and report generation
 
-## Current heuristics
+## Main Commands
 
-- Label keywords are split into two buckets:
-  - manufacture-like
-  - expiry-like
-- OCR text is normalized to reduce common mistakes such as `O -> 0`
-- Dates are parsed from:
-  - separated numeric forms
-  - Chinese year/month/day forms
-  - compact numeric strings
-- If no explicit role is found, the app may infer:
-  - earlier date -> manufacture
-  - later date -> expiry
+Build release APK:
 
-## What still needs real-world tuning
+```powershell
+.\scripts\build_release_apk.ps1
+```
 
-- Reflection-heavy packaging
-- Wrinkled or curved plastic bags
-- Faint inkjet and dot-matrix printing
-- Cases with multiple unrelated numbers near the date
-- Cases where MFG and EXP appear in very different layouts
+Generate validation report:
 
-## Best next step on another machine
+```powershell
+python -m pip install -r tools\requirements.txt
+.\scripts\run_val_report.ps1 -Dataset C:\Users\insta\Desktop\dataset -Split val
+```
 
-Use real package photos or a connected device and test these scenarios:
+## Important Files
 
-1. `MFG` and date on the same line
-2. `EXP` label above or below the date
-3. Date only, no label
-4. Compact numeric date like `20261121`
-5. Month-first compact date like `11212026`
-6. Strong glare and low contrast
-7. Two dates shown together on one label
+- `README.md`
+- `docs/OFFLINE_ONNX_DEPLOYMENT.md`
+- `scripts/build_release_apk.ps1`
+- `scripts/run_val_report.ps1`
+- `tools/mobile_onnx_html_report.py`
+- `app/src/main/java/com/example/foodocr/offline/`
+- `app/src/main/assets/models/`
 
-For each failure case, save:
+## Current Validation Result
 
-- original image
-- expected output
-- actual output
-- whether the label was present
-- whether reflection or blur was involved
+Using the local `val` dataset:
 
-## Suggested future improvements
+```text
+images: 362
+pass: 350
+fail: 12
+E2E accuracy: 96.7%
+crop padding: x=6, y=0
+```
 
-- Add a still-image import/test mode inside the app
-- Add a debug overlay showing OCR lines and chosen candidates
-- Add confidence logging for role scoring and date voting
-- Add ROI cropping before OCR
-- Add a second OCR pass with targeted crop regions
-- If needed, integrate OpenCV for adaptive thresholding and denoising
+Latest Android APK metadata:
 
-## Build notes
+```text
+versionName: 1.0.2
+versionCode: 3
+```
 
-- The project uses Gradle wrapper, so Android Studio can sync directly
-- `local.properties` is intentionally ignored because it is machine-specific
-- This repo should not commit `build/` outputs
+Main remaining failures are mostly recognition mistakes, with a few parser or
+matching edge cases. The earlier large drop was mostly caused by vertical crop
+padding pulling unrelated text into the PPOCR recognition crop.
+
+## Device Fixes Already Applied
+
+- Fixed Android OpenCV `CV_8UC3` tensor conversion by reading Mat data as
+  `ByteArray` instead of `DoubleArray`.
+- Fixed ONNX Runtime Android output decoding by supporting Java array outputs
+  such as `float[][][]`, not only `OnnxTensor`.
+
+## What Not To Commit
+
+Do not commit:
+
+- `app/build/`
+- `outputs/`
+- generated `*.apk`
+- `.venv/`
+- local Android Studio files such as `local.properties`
+
+The ONNX model assets should be committed because they are required for a fresh
+clone to build and run the offline pipeline.
+
+## Next Improvement Ideas
+
+- Add an in-app still-image import/replay mode
+- Add OBB or four-point crop correction for slanted date text
+- Fine-tune rec on the remaining failure crops
+- Add a small regression subset to run quickly before each APK build

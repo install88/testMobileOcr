@@ -15,6 +15,16 @@
         app:layout_constraintStart_toStartOf="parent"
         app:layout_constraintTop_toTopOf="parent" />
 
+    <com.example.foodocr.ScanGuideView
+        android:id="@+id/scanGuide"
+        android:layout_width="0dp"
+        android:layout_height="0dp"
+        android:importantForAccessibility="no"
+        app:layout_constraintBottom_toBottomOf="@id/viewFinder"
+        app:layout_constraintEnd_toEndOf="@id/viewFinder"
+        app:layout_constraintStart_toStartOf="@id/viewFinder"
+        app:layout_constraintTop_toTopOf="@id/viewFinder" />
+
     <LinearLayout
         android:id="@+id/resultPanel"
         android:layout_width="0dp"
@@ -46,6 +56,17 @@
             android:text="請讓日期區域佔據畫面中間，並停穩 0.5 秒"
             android:textColor="#C8D6E5"
             android:textSize="13sp" />
+
+        <TextView
+            android:id="@+id/debugText"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="8dp"
+            android:fontFamily="monospace"
+            android:maxLines="5"
+            android:text="DBG: waiting"
+            android:textColor="#FFD54F"
+            android:textSize="12sp" />
 
         <TextView
             android:id="@+id/mfgResult"

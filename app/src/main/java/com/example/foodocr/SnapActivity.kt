@@ -10,7 +10,10 @@ import android.util.Log
 import android.widget.Button
 import android.widget.TextView
 import androidx.appcompat.app.AppCompatActivity
+import androidx.camera.core.AspectRatio
 import androidx.camera.core.CameraSelector
+import androidx.camera.core.ExperimentalGetImage
+import androidx.camera.core.ImageAnalysis
 import androidx.camera.core.ImageCapture
 import androidx.camera.core.ImageCaptureException
 import androidx.camera.core.ImageProxy
@@ -26,6 +29,7 @@ import com.example.foodocr.offline.OfflineDatePipelineProvider
 import com.example.foodocr.offline.OfflineModelAssets
 import com.example.foodocr.offline.cropToScanGuideRoi
 import com.example.foodocr.offline.toBitmapFromJpeg
+import com.example.foodocr.offline.toBitmapFromYuv
 import java.util.concurrent.ExecutorService
 import java.util.concurrent.Executors
 import java.util.concurrent.atomic.AtomicBoolean
@@ -34,6 +38,7 @@ import kotlinx.coroutines.launch
 class SnapActivity : AppCompatActivity() {
 
     private lateinit var viewFinder: PreviewView
+    private lateinit var yoloOverlay: BoundingBoxOverlayView
     private lateinit var statusView: TextView
     private lateinit var hintView: TextView
     private lateinit var mfgResultView: TextView
@@ -45,12 +50,16 @@ class SnapActivity : AppCompatActivity() {
     private var imageCapture: ImageCapture? = null
     private var pipeline: OfflineDatePipeline? = null
     private val analyzing = AtomicBoolean(false)
+    // Live preview YOLO: throttle and re-entrancy guard separate from capture flow
+    private val livePreviewBusy = AtomicBoolean(false)
+    @Volatile private var lastLivePreviewAt = 0L
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         setContentView(R.layout.activity_snap)
 
         viewFinder = findViewById(R.id.viewFinder)
+        yoloOverlay = findViewById(R.id.yoloOverlay)
         statusView = findViewById(R.id.statusText)
         hintView = findViewById(R.id.hintText)
         mfgResultView = findViewById(R.id.mfgResult)
@@ -108,23 +117,41 @@ class SnapActivity : AppCompatActivity() {
         }
     }
 
+    @OptIn(ExperimentalGetImage::class)
     private fun startCamera() {
         val cameraProviderFuture = ProcessCameraProvider.getInstance(this)
         cameraProviderFuture.addListener(
             {
                 val cameraProvider = cameraProviderFuture.get()
 
-                val preview = Preview.Builder().build().also {
-                    it.surfaceProvider = viewFinder.surfaceProvider
-                }
+                // RATIO_16_9 aligns Preview + ImageCapture to the same frame shape,
+                // so the ScanGuide ROI looks identical between auto and snap modes
+                // (avoids 4:3 capture giving YOLO a different aspect than 16:9 preview).
+                val preview = Preview.Builder()
+                    .setTargetAspectRatio(AspectRatio.RATIO_16_9)
+                    .build().also {
+                        it.surfaceProvider = viewFinder.surfaceProvider
+                    }
 
                 val capture = ImageCapture.Builder()
                     // MAXIMIZE_QUALITY: wait for AF/AE convergence + multi-frame merge.
                     // Adds ~200-500ms latency but yields much sharper images,
                     // which matters when YOLO is trained on lower-res images.
                     .setCaptureMode(ImageCapture.CAPTURE_MODE_MAXIMIZE_QUALITY)
+                    .setTargetAspectRatio(AspectRatio.RATIO_16_9)
                     .build()
                 imageCapture = capture
+
+                // Live YOLO preview: continuously analyze frames at ~350ms cadence
+                // and update the red bounding-box overlay so users see whether the
+                // model is locking onto the date BEFORE they press shutter.
+                val imageAnalysis = ImageAnalysis.Builder()
+                    .setBackpressureStrategy(ImageAnalysis.STRATEGY_KEEP_ONLY_LATEST)
+                    .setTargetAspectRatio(AspectRatio.RATIO_16_9)
+                    .build()
+                    .also { analysis ->
+                        analysis.setAnalyzer(cameraExecutor) { proxy -> analyzeLivePreview(proxy) }
+                    }
 
                 try {
                     cameraProvider.unbindAll()
@@ -133,6 +160,7 @@ class SnapActivity : AppCompatActivity() {
                         CameraSelector.DEFAULT_BACK_CAMERA,
                         preview,
                         capture,
+                        imageAnalysis,
                     )
                     statusView.text = "對焦後按下拍攝鈕"
                     hintView.text = "讓日期區域停在掃描框內，確認清楚後按下「拍攝」"
@@ -146,6 +174,61 @@ class SnapActivity : AppCompatActivity() {
         )
     }
 
+    /**
+     * Live preview YOLO inference. Runs at ~350ms cadence to keep the overlay
+     * responsive without hogging CPU. Skipped while capture flow is active
+     * (analyzing == true) — overlay clears so users aren't shown stale boxes
+     * during the snap-result review state.
+     */
+    @ExperimentalGetImage
+    private fun analyzeLivePreview(image: ImageProxy) {
+        val now = android.os.SystemClock.elapsedRealtime()
+        // Pause overlay while user is reviewing a capture (avoid stale visual).
+        if (analyzing.get()) {
+            image.close()
+            return
+        }
+        if (now - lastLivePreviewAt < LIVE_PREVIEW_INTERVAL_MS ||
+            !livePreviewBusy.compareAndSet(false, true)
+        ) {
+            image.close()
+            return
+        }
+        lastLivePreviewAt = now
+
+        try {
+            val pipeline = pipeline ?: run {
+                image.close()
+                livePreviewBusy.set(false)
+                return
+            }
+            val frame = image.toBitmapFromYuv() ?: run {
+                image.close()
+                livePreviewBusy.set(false)
+                return
+            }
+            val roi = frame.cropToScanGuideRoi()
+            val result = pipeline.analyze(roi)
+            val roiW = result.imageWidth.toFloat().coerceAtLeast(1f)
+            val roiH = result.imageHeight.toFloat().coerceAtLeast(1f)
+            val boxes = result.detections.map { d ->
+                BoundingBoxOverlayView.NormalizedBox(
+                    left = (d.bbox.left / roiW).coerceIn(0f, 1f),
+                    top = (d.bbox.top / roiH).coerceIn(0f, 1f),
+                    right = (d.bbox.right / roiW).coerceIn(0f, 1f),
+                    bottom = (d.bbox.bottom / roiH).coerceIn(0f, 1f),
+                    confidence = d.confidence,
+                )
+            }
+            runOnUiThread { yoloOverlay.updateBoxes(boxes) }
+        } catch (error: Exception) {
+            Log.w(TAG, "Live YOLO preview failed", error)
+        } finally {
+            livePreviewBusy.set(false)
+            image.close()
+        }
+    }
+
     private fun onCaptureClicked() {
         val capture = imageCapture ?: return
         if (!analyzing.compareAndSet(false, true)) {
@@ -155,6 +238,9 @@ class SnapActivity : AppCompatActivity() {
         btnRetake.isEnabled = false
         statusView.text = "拍攝中..."
         hintView.text = "請保持手機穩定"
+        // Freeze the live YOLO overlay so users see the boxes that triggered the snap,
+        // not the ones the next frame produced — better visual continuity.
+        // (Will be cleared on retake.)
 
         capture.takePicture(
             cameraExecutor,
@@ -274,6 +360,7 @@ class SnapActivity : AppCompatActivity() {
         expResultView.setTextColor(Color.parseColor("#7CFF6B"))
         statusView.text = "對焦後按下拍攝鈕"
         hintView.text = "讓日期區域停在掃描框內，確認清楚後按下「拍攝」"
+        yoloOverlay.clear()
         btnCapture.isEnabled = true
         btnRetake.isEnabled = false
     }
@@ -313,5 +400,8 @@ class SnapActivity : AppCompatActivity() {
         // Max bitmap side fed to pipeline. 1280px keeps detail without overwhelming
         // YOLO's 640x640 input space. Matches roughly what auto-detect mode sees.
         private const val MAX_INPUT_SIDE = 1280
+        // Throttle live YOLO preview so we don't burn CPU/battery. 350ms is the
+        // same cadence MainActivity (auto mode) uses.
+        private const val LIVE_PREVIEW_INTERVAL_MS = 350L
     }
 }

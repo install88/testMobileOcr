@@ -2,10 +2,8 @@ package com.example.foodocr
 
 import android.Manifest
 import android.content.pm.PackageManager
-import android.graphics.Bitmap
 import android.graphics.Color
 import android.os.Bundle
-import kotlin.math.max
 import android.util.Log
 import android.widget.Button
 import android.widget.TextView
@@ -14,8 +12,6 @@ import androidx.camera.core.AspectRatio
 import androidx.camera.core.CameraSelector
 import androidx.camera.core.ExperimentalGetImage
 import androidx.camera.core.ImageAnalysis
-import androidx.camera.core.ImageCapture
-import androidx.camera.core.ImageCaptureException
 import androidx.camera.core.ImageProxy
 import androidx.camera.core.Preview
 import androidx.camera.lifecycle.ProcessCameraProvider
@@ -26,9 +22,9 @@ import androidx.lifecycle.lifecycleScope
 import com.example.foodocr.offline.AssetModelRepository
 import com.example.foodocr.offline.OfflineDatePipeline
 import com.example.foodocr.offline.OfflineDatePipelineProvider
+import com.example.foodocr.offline.OfflineFrameResult
 import com.example.foodocr.offline.OfflineModelAssets
 import com.example.foodocr.offline.cropToScanGuideRoi
-import com.example.foodocr.offline.toBitmapFromJpeg
 import com.example.foodocr.offline.toBitmapFromYuv
 import java.util.concurrent.ExecutorService
 import java.util.concurrent.Executors
@@ -47,12 +43,17 @@ class SnapActivity : AppCompatActivity() {
     private lateinit var btnRetake: Button
 
     private lateinit var cameraExecutor: ExecutorService
-    private var imageCapture: ImageCapture? = null
     private var pipeline: OfflineDatePipeline? = null
     private val analyzing = AtomicBoolean(false)
     // Live preview YOLO: throttle and re-entrancy guard separate from capture flow
     private val livePreviewBusy = AtomicBoolean(false)
     @Volatile private var lastLivePreviewAt = 0L
+
+    // Latest analysis frame result — used by Freeze-snap design: pressing the
+    // capture button reads this directly instead of triggering ImageCapture.
+    // This makes snap mode 100% equivalent to auto-detect mode (same pipeline,
+    // same input frame) — what the user sees in the red overlay IS the result.
+    @Volatile private var lastFrameResult: OfflineFrameResult? = null
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -124,27 +125,18 @@ class SnapActivity : AppCompatActivity() {
             {
                 val cameraProvider = cameraProviderFuture.get()
 
-                // RATIO_16_9 aligns Preview + ImageCapture to the same frame shape,
-                // so the ScanGuide ROI looks identical between auto and snap modes
-                // (avoids 4:3 capture giving YOLO a different aspect than 16:9 preview).
+                // RATIO_16_9 aligns Preview + ImageAnalysis frame shape so the
+                // ScanGuide ROI looks identical between auto and snap modes.
                 val preview = Preview.Builder()
                     .setTargetAspectRatio(AspectRatio.RATIO_16_9)
                     .build().also {
                         it.surfaceProvider = viewFinder.surfaceProvider
                     }
 
-                val capture = ImageCapture.Builder()
-                    // MAXIMIZE_QUALITY: wait for AF/AE convergence + multi-frame merge.
-                    // Adds ~200-500ms latency but yields much sharper images,
-                    // which matters when YOLO is trained on lower-res images.
-                    .setCaptureMode(ImageCapture.CAPTURE_MODE_MAXIMIZE_QUALITY)
-                    .setTargetAspectRatio(AspectRatio.RATIO_16_9)
-                    .build()
-                imageCapture = capture
-
-                // Live YOLO preview: continuously analyze frames at ~350ms cadence
-                // and update the red bounding-box overlay so users see whether the
-                // model is locking onto the date BEFORE they press shutter.
+                // Continuous YOLO + rec pipeline on preview frames. Drives both
+                // the red bounding-box overlay AND the Freeze-snap result. No
+                // ImageCapture use case is bound — pressing the shutter freezes
+                // the most recent analysis result instead of taking a new photo.
                 val imageAnalysis = ImageAnalysis.Builder()
                     .setBackpressureStrategy(ImageAnalysis.STRATEGY_KEEP_ONLY_LATEST)
                     .setTargetAspectRatio(AspectRatio.RATIO_16_9)
@@ -159,7 +151,6 @@ class SnapActivity : AppCompatActivity() {
                         this,
                         CameraSelector.DEFAULT_BACK_CAMERA,
                         preview,
-                        capture,
                         imageAnalysis,
                     )
                     statusView.text = "對焦後按下拍攝鈕"
@@ -209,6 +200,12 @@ class SnapActivity : AppCompatActivity() {
             }
             val roi = frame.cropToScanGuideRoi()
             val result = pipeline.analyze(roi)
+            // Freeze design: cache the full result so capture button can use it
+            // immediately. This is the SAME frame the overlay is drawn from —
+            // pressing the button is guaranteed to give you the result the
+            // red boxes were promising.
+            lastFrameResult = result
+
             val roiW = result.imageWidth.toFloat().coerceAtLeast(1f)
             val roiH = result.imageHeight.toFloat().coerceAtLeast(1f)
             val boxes = result.detections.map { d ->
@@ -229,118 +226,59 @@ class SnapActivity : AppCompatActivity() {
         }
     }
 
+    /**
+     * Freeze-snap design: pressing the capture button reads the most recent
+     * ImageAnalysis result instead of triggering ImageCapture. Three benefits:
+     *   1. Zero latency — result is already computed.
+     *   2. No AF re-trigger gap — what the user saw (red overlay) IS the result.
+     *   3. 100% parity with auto-detect mode (same pipeline, same input frame).
+     *
+     * The legacy ImageCapture + downscale path was removed in this commit;
+     * recoverable via git revert if a high-resolution captured image is ever
+     * needed (e.g. evidence storage in the production app).
+     */
     private fun onCaptureClicked() {
-        val capture = imageCapture ?: return
         if (!analyzing.compareAndSet(false, true)) {
             return
         }
         btnCapture.isEnabled = false
         btnRetake.isEnabled = false
-        statusView.text = "拍攝中..."
-        hintView.text = "請保持手機穩定"
-        // Freeze the live YOLO overlay so users see the boxes that triggered the snap,
-        // not the ones the next frame produced — better visual continuity.
-        // (Will be cleared on retake.)
 
-        capture.takePicture(
-            cameraExecutor,
-            object : ImageCapture.OnImageCapturedCallback() {
-                override fun onCaptureSuccess(image: ImageProxy) {
-                    try {
-                        processCapturedImage(image)
-                    } finally {
-                        image.close()
-                    }
-                }
-
-                override fun onError(exception: ImageCaptureException) {
-                    Log.e(TAG, "拍攝失敗", exception)
-                    runOnUiThread {
-                        statusView.text = "拍攝失敗：${exception.imageCaptureError}"
-                        hintView.text = "請再試一次"
-                        analyzing.set(false)
-                        btnCapture.isEnabled = true
-                    }
-                }
-            },
-        )
+        val frozen = lastFrameResult
+        if (frozen == null) {
+            statusView.text = "畫面尚未分析、請稍候"
+            hintView.text = "等紅框出現再按拍攝"
+            analyzing.set(false)
+            btnCapture.isEnabled = true
+            return
+        }
+        displayFrozenResult(frozen)
     }
 
-    private fun processCapturedImage(image: ImageProxy) {
-        val pipeline = pipeline
-        if (pipeline == null) {
-            runOnUiThread {
-                statusView.text = "Pipeline 未初始化"
-                analyzing.set(false)
-                btnCapture.isEnabled = true
-            }
-            return
+    /** Render the captured (frozen) OfflineFrameResult on the result panel. */
+    private fun displayFrozenResult(result: OfflineFrameResult) {
+        val mfgDate = result.manufacture?.date
+        val expDate = result.expiry?.date
+        val elapsed = result.elapsedMs
+
+        renderResult(mfgResultView, "MFG", mfgDate, Color.parseColor("#64FFDA"))
+        renderResult(expResultView, "EXP", expDate, Color.parseColor("#7CFF6B"))
+
+        statusView.text = when {
+            mfgDate != null && expDate != null -> "辨識完成（${elapsed}ms）"
+            mfgDate != null || expDate != null -> "僅辨識到單一日期（${elapsed}ms）"
+            else -> "未偵測到日期（${elapsed}ms）"
         }
-        val bitmap = image.toBitmapFromJpeg()
-        if (bitmap == null) {
-            runOnUiThread {
-                statusView.text = "影像解碼失敗"
-                hintView.text = "請再試一次"
-                analyzing.set(false)
-                btnCapture.isEnabled = true
-            }
-            return
+        hintView.text = if (mfgDate == null && expDate == null) {
+            "請調整角度或等紅框穩定再試"
+        } else {
+            "若結果不正確，請按「重拍」"
         }
 
-        val started = android.os.SystemClock.elapsedRealtime()
-        // Defensive downscale: bring high-res ImageCapture output (4K+) closer to
-        // the YOLO training distribution (~600-720p). Without this, fine date
-        // details get aliased away during YOLO's internal resize to 640x640.
-        val maxSide = max(bitmap.width, bitmap.height)
-        val downscaled = if (maxSide > MAX_INPUT_SIDE) {
-            val ratio = MAX_INPUT_SIDE.toFloat() / maxSide
-            Bitmap.createScaledBitmap(
-                bitmap,
-                (bitmap.width * ratio).toInt(),
-                (bitmap.height * ratio).toInt(),
-                true,
-            )
-        } else bitmap
-        val roiBitmap = downscaled.cropToScanGuideRoi()
-        val result = try {
-            pipeline.analyzeForCamera(roiBitmap)
-        } catch (error: Exception) {
-            Log.e(TAG, "Pipeline 失敗", error)
-            null
-        }
-        val elapsed = android.os.SystemClock.elapsedRealtime() - started
-
-        runOnUiThread {
-            if (result == null) {
-                statusView.text = "辨識失敗"
-                hintView.text = "請重新拍攝"
-                analyzing.set(false)
-                btnCapture.isEnabled = true
-                btnRetake.isEnabled = true
-                return@runOnUiThread
-            }
-
-            val mfg = result.manufactureObservation
-            val exp = result.expiryObservation
-
-            renderResult(mfgResultView, "MFG", mfg?.normalizedDate, Color.parseColor("#64FFDA"))
-            renderResult(expResultView, "EXP", exp?.normalizedDate, Color.parseColor("#7CFF6B"))
-
-            statusView.text = when {
-                mfg != null && exp != null -> "辨識完成（${elapsed}ms）"
-                mfg != null || exp != null -> "僅辨識到單一日期（${elapsed}ms）"
-                else -> "未偵測到日期（${elapsed}ms）"
-            }
-            hintView.text = if (mfg == null && exp == null) {
-                "請調整角度或對焦後重拍"
-            } else {
-                "若結果不正確，請按「重拍」"
-            }
-
-            analyzing.set(false)
-            btnCapture.isEnabled = false
-            btnRetake.isEnabled = true
-        }
+        // Keep analyzing=true so the red overlay freezes on the captured boxes
+        // until the user hits "重拍". resetForRetake() clears the flag.
+        btnCapture.isEnabled = false
+        btnRetake.isEnabled = true
     }
 
     private fun renderResult(view: TextView, label: String, date: String?, color: Int) {
@@ -363,6 +301,8 @@ class SnapActivity : AppCompatActivity() {
         yoloOverlay.clear()
         btnCapture.isEnabled = true
         btnRetake.isEnabled = false
+        // Resume the live YOLO overlay (analyzeLivePreview skips while analyzing=true)
+        analyzing.set(false)
     }
 
     override fun onRequestPermissionsResult(
@@ -397,9 +337,6 @@ class SnapActivity : AppCompatActivity() {
         private const val TAG = "SnapActivity"
         private const val REQUEST_CODE_PERMISSIONS = 11
         private val REQUIRED_PERMISSIONS = arrayOf(Manifest.permission.CAMERA)
-        // Max bitmap side fed to pipeline. 1280px keeps detail without overwhelming
-        // YOLO's 640x640 input space. Matches roughly what auto-detect mode sees.
-        private const val MAX_INPUT_SIDE = 1280
         // Throttle live YOLO preview so we don't burn CPU/battery. 350ms is the
         // same cadence MainActivity (auto mode) uses.
         private const val LIVE_PREVIEW_INTERVAL_MS = 350L

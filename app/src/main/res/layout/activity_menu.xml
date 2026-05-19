@@ -1,0 +1,45 @@
+<?xml version="1.0" encoding="utf-8"?>
+<LinearLayout xmlns:android="http://schemas.android.com/apk/res/android"
+    android:layout_width="match_parent"
+    android:layout_height="match_parent"
+    android:orientation="vertical"
+    android:gravity="center"
+    android:background="#101820"
+    android:padding="32dp">
+
+    <TextView
+        android:layout_width="wrap_content"
+        android:layout_height="wrap_content"
+        android:text="@string/app_name"
+        android:textColor="#FFFFFF"
+        android:textSize="32sp"
+        android:textStyle="bold"
+        android:layout_marginBottom="48dp" />
+
+    <Button
+        android:id="@+id/btnAutoMode"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:text="自動偵測"
+        android:textSize="20sp"
+        android:padding="20dp"
+        android:layout_marginBottom="24dp" />
+
+    <Button
+        android:id="@+id/btnSnapMode"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:text="拍照確認"
+        android:textSize="20sp"
+        android:padding="20dp" />
+
+    <TextView
+        android:layout_width="wrap_content"
+        android:layout_height="wrap_content"
+        android:text="自動偵測：連續掃描，跨幀投票\n拍照確認：對焦後按鈕拍攝，單張辨識"
+        android:textColor="#B0B0B0"
+        android:textSize="14sp"
+        android:gravity="center"
+        android:layout_marginTop="32dp" />
+
+</LinearLayout>

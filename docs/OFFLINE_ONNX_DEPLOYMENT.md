@@ -18,7 +18,8 @@ ppocr_keys_v1.txt
 ```
 
 They are small enough to commit in this repo. If any of the three files is
-missing, `MainActivity` falls back to the older ML Kit analyzer.
+missing, `MainActivity` shows an error screen — the ML Kit fallback was
+removed in v1.1.0.
 
 ## Current Crop Setting
 

@@ -16,6 +16,7 @@ class OfflineDatePipeline private constructor(
     private val recognizer: PpocrDateRecognizer,
 ) : AutoCloseable {
 
+    @Synchronized
     fun analyze(bitmap: Bitmap): OfflineFrameResult {
         val image = OpenCvImageOps.bitmapToBgr(bitmap)
         return try {
@@ -25,6 +26,7 @@ class OfflineDatePipeline private constructor(
         }
     }
 
+    @Synchronized
     fun analyze(imageBgr: Mat): OfflineFrameResult {
         val started = android.os.SystemClock.elapsedRealtime()
         val detections = detector.detect(imageBgr)
@@ -59,6 +61,7 @@ class OfflineDatePipeline private constructor(
         )
     }
 
+    @Synchronized
     fun analyzeForCamera(bitmap: Bitmap): FrameAnalysis {
         val result = analyze(bitmap)
         val now = android.os.SystemClock.elapsedRealtime()

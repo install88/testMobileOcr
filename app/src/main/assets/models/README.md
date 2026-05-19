@@ -9,4 +9,5 @@ These files are required for the offline ONNX pipeline:
 They are committed with the project so a fresh clone can build an APK without
 downloading models separately.
 
-If any file is missing, the Android app falls back to the ML Kit analyzer.
+If any file is missing, the Android app will show an error screen — there is no
+fallback (ML Kit dependency was removed in v1.1.0).

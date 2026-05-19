@@ -15,12 +15,15 @@ import androidx.camera.lifecycle.ProcessCameraProvider
 import androidx.camera.view.PreviewView
 import androidx.core.app.ActivityCompat
 import androidx.core.content.ContextCompat
+import androidx.lifecycle.lifecycleScope
 import com.example.foodocr.offline.AssetModelRepository
 import com.example.foodocr.offline.OfflineDatePipeline
+import com.example.foodocr.offline.OfflineDatePipelineProvider
 import com.example.foodocr.offline.OfflineModelAssets
 import com.example.foodocr.offline.OfflineOnnxDateAnalyzer
 import java.util.concurrent.ExecutorService
 import java.util.concurrent.Executors
+import kotlinx.coroutines.launch
 
 class MainActivity : AppCompatActivity() {
 
@@ -56,7 +59,7 @@ class MainActivity : AppCompatActivity() {
         renderVoteState()
 
         if (allPermissionsGranted()) {
-            startCamera()
+            bootstrap()
         } else {
             statusView.text = "等待相機權限..."
             hintView.text = "請允許相機權限後，讓日期區域停在畫面中央"
@@ -64,8 +67,38 @@ class MainActivity : AppCompatActivity() {
         }
     }
 
+    private fun bootstrap() {
+        if (!AssetModelRepository.hasRequiredAssets(this, OfflineModelAssets())) {
+            statusView.text = "離線模型缺失"
+            hintView.text = "請重新安裝 App，模型資源不完整"
+            mfgResultView.setTextColor(Color.RED)
+            expResultView.setTextColor(Color.RED)
+            return
+        }
+
+        if (OfflineDatePipelineProvider.isLoaded()) {
+            statusView.text = "Offline ONNX mode"
+        } else {
+            statusView.text = "載入模型中..."
+            hintView.text = "首次啟動需要約 1-2 秒"
+        }
+
+        lifecycleScope.launch {
+            try {
+                val pipeline = OfflineDatePipelineProvider.get(this@MainActivity)
+                startCamera(pipeline)
+            } catch (error: Exception) {
+                Log.e(TAG, "模型載入失敗", error)
+                statusView.text = "模型載入失敗"
+                hintView.text = error.message?.take(160) ?: error::class.java.simpleName
+                mfgResultView.setTextColor(Color.RED)
+                expResultView.setTextColor(Color.RED)
+            }
+        }
+    }
+
     @OptIn(ExperimentalGetImage::class)
-    private fun startCamera() {
+    private fun startCamera(pipeline: OfflineDatePipeline) {
         val cameraProviderFuture = ProcessCameraProvider.getInstance(this)
 
         cameraProviderFuture.addListener(
@@ -77,8 +110,8 @@ class MainActivity : AppCompatActivity() {
                 }
 
                 dateAnalyzer?.close()
-                val analyzer = createAnalyzer()
-                dateAnalyzer = analyzer as AutoCloseable
+                val analyzer = OfflineOnnxDateAnalyzer(pipeline) { result -> handleFrameResult(result) }
+                dateAnalyzer = analyzer
 
                 val imageAnalysis = ImageAnalysis.Builder()
                     .setBackpressureStrategy(ImageAnalysis.STRATEGY_KEEP_ONLY_LATEST)
@@ -107,18 +140,6 @@ class MainActivity : AppCompatActivity() {
             },
             ContextCompat.getMainExecutor(this),
         )
-    }
-
-    @ExperimentalGetImage
-    private fun createAnalyzer(): ImageAnalysis.Analyzer {
-        return if (AssetModelRepository.hasRequiredAssets(this, OfflineModelAssets())) {
-            statusView.text = "Offline ONNX mode"
-            val pipeline = OfflineDatePipeline.create(this)
-            OfflineOnnxDateAnalyzer(pipeline) { result -> handleFrameResult(result) }
-        } else {
-            statusView.text = "ML Kit fallback mode"
-            FoodDateAnalyzer { result -> handleFrameResult(result) }
-        }
     }
 
     private fun handleFrameResult(result: FrameAnalysis) {
@@ -174,7 +195,7 @@ class MainActivity : AppCompatActivity() {
 
         if (requestCode == REQUEST_CODE_PERMISSIONS) {
             if (allPermissionsGranted()) {
-                startCamera()
+                bootstrap()
             } else {
                 statusView.text = "需要相機權限才能掃描日期"
                 hintView.text = "請到系統設定開啟相機權限後再試一次"

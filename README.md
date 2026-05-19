@@ -9,7 +9,8 @@ The app does not call any API. When the ONNX assets are present, it runs:
 CameraX frame -> scan-guide ROI -> YOLO date detector -> crop -> PPOCR rec -> date parser -> MFG/EXP assignment
 ```
 
-If any model asset is missing, the app falls back to the older ML Kit analyzer.
+If any model asset is missing, the app shows an error screen (ML Kit fallback
+was removed in v1.1.0 along with arm64-only APK packaging).
 
 ## Current Accuracy Baseline
 

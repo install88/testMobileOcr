@@ -68,7 +68,7 @@ class OfflineOnnxDateAnalyzer(
     }
 
     override fun close() {
-        pipeline.close()
+        // Pipeline is owned by OfflineDatePipelineProvider (process-scoped singleton); do not dispose it here.
     }
 
     private fun ImageProxy.toBitmapViaJpeg(): android.graphics.Bitmap? {

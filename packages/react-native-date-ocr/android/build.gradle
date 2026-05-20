@@ -1,0 +1,125 @@
+// Android library module for react-native-date-ocr.
+//
+// This module is consumed by a React Native host app (e.g. Carrefour HHT)
+// via React Native autolinking. The host app's Gradle setup provides the
+// React Native classpath and resolves transitive deps.
+//
+// We do NOT try to build this module standalone from the testMobileOcr
+// workspace — it is built when the consuming RN project includes it.
+
+buildscript {
+    ext.getExtOrDefault = { name ->
+        return rootProject.ext.has(name) ? rootProject.ext.get(name) : project.properties["DateOcr_" + name]
+    }
+
+    repositories {
+        google()
+        mavenCentral()
+    }
+
+    dependencies {
+        // Android Gradle plugin and Kotlin plugin are provided by the host project.
+        // These versions are only consulted when the module is built standalone,
+        // which we don't currently support. Host project supplies the real classpath.
+        classpath "com.android.tools.build:gradle:7.4.2"
+        classpath "org.jetbrains.kotlin:kotlin-gradle-plugin:1.8.22"
+    }
+}
+
+apply plugin: "com.android.library"
+apply plugin: "kotlin-android"
+
+def safeExtGet(prop, fallback) {
+    rootProject.ext.has(prop) ? rootProject.ext.get(prop) : fallback
+}
+
+android {
+    namespace "com.dateocr.rn"
+    compileSdkVersion safeExtGet("compileSdkVersion", 34)
+
+    defaultConfig {
+        minSdkVersion safeExtGet("minSdkVersion", 24)
+        targetSdkVersion safeExtGet("targetSdkVersion", 34)
+        // Note: We do NOT set abiFilters here. The host app decides which ABIs
+        // to bundle. Real Carrefour HHT devices are arm64-v8a — to slim the
+        // production APK, set abiFilters in the host app's build.gradle.
+        // Leaving it open allows the same module to work on x86_64 emulators.
+    }
+
+    buildTypes {
+        release {
+            minifyEnabled false
+        }
+    }
+
+    compileOptions {
+        sourceCompatibility JavaVersion.VERSION_17
+        targetCompatibility JavaVersion.VERSION_17
+    }
+
+    kotlinOptions {
+        jvmTarget = "17"
+    }
+
+    // Avoid duplicate native lib conflicts when the host app also bundles
+    // ONNX Runtime / OpenCV via other modules (e.g. @gutenye/ocr-react-native).
+    packagingOptions {
+        pickFirst "lib/arm64-v8a/libc++_shared.so"
+        pickFirst "lib/arm64-v8a/libonnxruntime.so"
+        pickFirst "lib/arm64-v8a/libonnxruntime4j_jni.so"
+        pickFirst "lib/arm64-v8a/libopencv_java4.so"
+    }
+
+    sourceSets {
+        main {
+            java.srcDirs = ["src/main/java"]
+        }
+    }
+
+    // Don't compress ONNX models if the host app bundles them as assets.
+    aaptOptions {
+        noCompress "onnx"
+    }
+}
+
+repositories {
+    mavenCentral()
+    google()
+    // JitPack hosts vision-camera AAR artifacts. Used here only at compile time
+    // (compileOnly dep) — at runtime the host app's autolinked vision-camera
+    // module provides the classes.
+    maven { url 'https://www.jitpack.io' }
+}
+
+// Force Kotlin stdlib to match the host project's Kotlin plugin version,
+// preventing D8 dex transform failures when our transitive deps bring 1.9.x.
+configurations.all {
+    resolutionStrategy.eachDependency { details ->
+        if (details.requested.group == "org.jetbrains.kotlin"
+                && details.requested.name.startsWith("kotlin-stdlib")) {
+            details.useVersion("1.8.22")
+        }
+    }
+}
+
+dependencies {
+    // React Native bridge classes — provided by the host app at link time.
+    compileOnly "com.facebook.react:react-native:+"
+
+    // vision-camera classes used by DateOcrFrameProcessorPlugin.
+    // compileOnly because the host app provides react-native-vision-camera
+    // (declared as a peerDependency in package.json). Hosts that don't install
+    // vision-camera still compile this AAR — the try/catch in DateOcrPackage
+    // gracefully skips plugin registration at runtime.
+    compileOnly "com.github.mrousavy:react-native-vision-camera:v4.0.5"
+
+    // OCR pipeline deps — bundled with the AAR.
+    // Pinned to 1.17.3 to match the minSdk=21 constraint of the host Carrefour app.
+    // (1.25.1 requires minSdk=24 which the HHT hand-held devices do not target.)
+    implementation "com.microsoft.onnxruntime:onnxruntime-android:1.17.3"
+    implementation "org.opencv:opencv:4.13.0"
+
+    // Kotlin stdlib is provided by the host project's Kotlin plugin.
+    // Declaring it explicitly here causes dex conflicts when the host uses a
+    // different Kotlin version (e.g. Carrefour pins kotlinVersion=1.8.22).
+}

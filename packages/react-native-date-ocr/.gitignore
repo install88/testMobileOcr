@@ -1,0 +1,15 @@
+# Build artifacts
+android/build/
+android/.gradle/
+android/local.properties
+android/.idea/
+android/*.iml
+
+# Node
+node_modules/
+
+# yarn pack output — packaged tarballs go to ../../releases/ instead
+*.tgz
+
+# Misc
+.DS_Store

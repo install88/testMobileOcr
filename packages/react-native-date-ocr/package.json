@@ -1,0 +1,41 @@
+{
+  "name": "react-native-date-ocr",
+  "version": "1.1.0",
+  "description": "React Native OCR module specialized for date recognition (YOLO11 detector + fine-tuned PPOCRv4 recognizer). Provides static-image OCR (drop-in for @gutenye/ocr-react-native) AND a vision-camera Frame Processor Plugin for live preview overlay.",
+  "main": "src/index.ts",
+  "module": "src/index.ts",
+  "react-native": "src/index.ts",
+  "source": "src/index.ts",
+  "types": "src/index.ts",
+  "files": [
+    "src",
+    "android/build.gradle",
+    "android/src",
+    "react-native.config.js",
+    "README.md",
+    "!android/build",
+    "!android/.gradle",
+    "!android/local.properties",
+    "!**/.*"
+  ],
+  "keywords": [
+    "react-native",
+    "ocr",
+    "date",
+    "yolo",
+    "paddleocr",
+    "onnxruntime",
+    "android"
+  ],
+  "license": "UNLICENSED",
+  "peerDependencies": {
+    "react": "*",
+    "react-native": "*",
+    "react-native-vision-camera": ">=4.0.0"
+  },
+  "peerDependenciesMeta": {
+    "react-native-vision-camera": {
+      "optional": true
+    }
+  }
+}

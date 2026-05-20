@@ -85,10 +85,6 @@ android {
 repositories {
     mavenCentral()
     google()
-    // JitPack hosts vision-camera AAR artifacts. Used here only at compile time
-    // (compileOnly dep) — at runtime the host app's autolinked vision-camera
-    // module provides the classes.
-    maven { url 'https://www.jitpack.io' }
 }
 
 // Force Kotlin stdlib to match the host project's Kotlin plugin version,
@@ -107,11 +103,14 @@ dependencies {
     compileOnly "com.facebook.react:react-native:+"
 
     // vision-camera classes used by DateOcrFrameProcessorPlugin.
-    // compileOnly because the host app provides react-native-vision-camera
-    // (declared as a peerDependency in package.json). Hosts that don't install
-    // vision-camera still compile this AAR — the try/catch in DateOcrPackage
-    // gracefully skips plugin registration at runtime.
-    compileOnly "com.github.mrousavy:react-native-vision-camera:v4.0.5"
+    // Pulled from the host RN app's autolinked subproject — this only resolves
+    // when the host has `react-native-vision-camera` installed and React Native
+    // autolinking has set it up as `:react-native-vision-camera`. Carrefour HHT
+    // has it; consumers that don't install vision-camera will see a compile
+    // error here, which is correct — the Frame Processor Plugin requires it.
+    if (findProject(":react-native-vision-camera") != null) {
+        compileOnly project(":react-native-vision-camera")
+    }
 
     // OCR pipeline deps — bundled with the AAR.
     // Pinned to 1.17.3 to match the minSdk=21 constraint of the host Carrefour app.

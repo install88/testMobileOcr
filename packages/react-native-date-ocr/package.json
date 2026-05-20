@@ -1,6 +1,6 @@
 {
   "name": "react-native-date-ocr",
-  "version": "1.1.0",
+  "version": "1.1.1",
   "description": "React Native OCR module specialized for date recognition (YOLO11 detector + fine-tuned PPOCRv4 recognizer). Provides static-image OCR (drop-in for @gutenye/ocr-react-native) AND a vision-camera Frame Processor Plugin for live preview overlay.",
   "main": "src/index.ts",
   "module": "src/index.ts",
